@@ -785,8 +785,8 @@ func (p *ElectraMetrics) ProcessSlashings() {
 	state := p.GetMetricsBase().NextState
 	for _, block := range state.Blocks {
 		whistleBlowerIdx := block.ProposerIndex // spec always contemplates whistleblower to be the block proposer
-		whistleBlowerReward := phase0.Gwei(0)
-		proposerReward := phase0.Gwei(0)
+		blockWhistleBlowerReward := phase0.Gwei(0)
+		blockProposerReward := phase0.Gwei(0)
 		// Modified to use ElectraAttesterSlashings
 		for _, attSlashing := range block.ElectraAttesterSlashings {
 			slashedValidatorIdxs := spec.SlashingIntersection(attSlashing.Attestation1.AttestingIndices, attSlashing.Attestation2.AttestingIndices)
@@ -796,6 +796,11 @@ func (p *ElectraMetrics) ProcessSlashings() {
 				if spec.IsSlashableValidator(slashedValidator, spec.EpochAtSlot(block.Slot)) {
 					valid = true
 					state.NewAttesterSlashings += 1
+					slashedEffBalance := state.Validators[idx].EffectiveBalance
+					wbr := slashedEffBalance / spec.WhistleBlowerRewardQuotient
+					pr := wbr * spec.ProposerWeight / spec.WeightDenominator
+					blockWhistleBlowerReward += wbr
+					blockProposerReward += pr
 				}
 				state.Slashings = append(state.Slashings,
 					spec.AgnosticSlashing{
@@ -815,6 +820,11 @@ func (p *ElectraMetrics) ProcessSlashings() {
 			if spec.IsSlashableValidator(slashedValidator, spec.EpochAtSlot(block.Slot)) {
 				valid = true
 				state.NewProposerSlashings += 1
+				slashedEffBalance := state.Validators[slashedValidatorIdx].EffectiveBalance
+				wbr := slashedEffBalance / spec.WhistleBlowerRewardQuotient
+				pr := wbr * spec.ProposerWeight / spec.WeightDenominator
+				blockWhistleBlowerReward += wbr
+				blockProposerReward += pr
 			}
 			slashing := spec.AgnosticSlashing{
 				SlashedValidator: slashedValidatorIdx,
@@ -827,15 +837,10 @@ func (p *ElectraMetrics) ProcessSlashings() {
 			state.Slashings = append(state.Slashings, slashing)
 		}
 
-		for _, slashing := range state.Slashings {
-			slashedEffBalance := p.baseMetrics.NextState.Validators[slashing.SlashedValidator].EffectiveBalance
-			whistleBlowerReward += slashedEffBalance / spec.WhistleBlowerRewardQuotient
-			proposerReward += whistleBlowerReward * spec.ProposerWeight / spec.WeightDenominator
-		}
-		p.baseMetrics.MaxSlashingRewards[block.ProposerIndex] += proposerReward
-		p.baseMetrics.MaxSlashingRewards[whistleBlowerIdx] += whistleBlowerReward - proposerReward
+		p.baseMetrics.MaxSlashingRewards[block.ProposerIndex] += blockProposerReward
+		p.baseMetrics.MaxSlashingRewards[whistleBlowerIdx] += blockWhistleBlowerReward - blockProposerReward
 
-		block.ManualReward += proposerReward + (whistleBlowerReward - proposerReward)
+		block.ManualReward += blockWhistleBlowerReward
 	}
 }
 
