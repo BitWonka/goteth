@@ -96,7 +96,15 @@ func (s *ChainAnalyzer) AdvanceFinalized(newFinalizedSlot phase0.Slot) {
 		if needsReprocess {
 			if stateRootChanged {
 				log.Warnf("cache state root: %s\nfinalized state root: %s", cacheState.StateRoot, finalizedStateRoot)
-				log.Warnf("state root for state (slot=%d) incorrect", cacheState.Slot)
+				log.Warnf("state root for state (slot=%d) incorrect, redownloading", cacheState.Slot)
+
+				// Evict the stale state from the in-memory cache and
+				// re-download from the beacon node (now finalized).
+				// Without this, StateHistory.Wait() returns the same
+				// wrong state and the analyzer loops forever.
+				stateSlot := phase0.Slot(cacheState.Slot)
+				s.downloadCache.StateHistory.Delete(epoch)
+				s.DownloadState(stateSlot)
 			}
 			s.dbClient.DeleteStateMetrics(phase0.Epoch(epoch))
 			log.Infof("rewriting metrics for epoch %d (stateRootChanged=%t, blocksChanged=%t, dep=%t)",

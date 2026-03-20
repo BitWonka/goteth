@@ -25,6 +25,17 @@ func (s *ChainAnalyzer) ProcessStateTransitionMetrics(epoch phase0.Epoch) {
 	routineKey := fmt.Sprintf("%s%d", epochProcesserTag, epoch)
 	s.processerBook.Acquire(routineKey) // resgiter we are about to process metrics for epoch
 
+	// Wait for previous epoch processing to complete before reading its blocks.
+	// ProcessAttestations writes block.ManualReward on nextState blocks, and the
+	// next epoch's processBlockRewards reads from those same shared block objects
+	// (via ChainCache). Without this barrier the reader can see a partially
+	// accumulated ManualReward, producing incorrect f_cl_manual_reward values
+	// (see https://github.com/migalabs/goteth/issues/242).
+	if epoch >= 1 {
+		prevEpochKey := fmt.Sprintf("%s%d", epochProcesserTag, epoch-1)
+		s.processerBook.WaitUntilInactive(prevEpochKey)
+	}
+
 	// Retrieve states to process metrics
 
 	prevState := &spec.AgnosticState{}
