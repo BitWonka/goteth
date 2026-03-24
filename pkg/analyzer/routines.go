@@ -50,11 +50,18 @@ func (s *ChainAnalyzer) runHead() {
 	log.Info("launching head routine")
 	nextSlotDownload := s.fillToHead()
 
-	if _, err := s.downloadCache.BlockHistory.Wait(s.ctx, SlotTo[uint64](nextSlotDownload)); err != nil {
-		log.Errorf("context cancelled waiting for block at slot %d: %s", nextSlotDownload, err)
-		return
+	// Wait for ALL blocks in the historical range to be downloaded, not
+	// just the last one. With parallel workers, blocks are downloaded
+	// out of order — the last slot may be ready while intermediate slots
+	// are still in-flight. Without this, the switch to head mode drops
+	// those pending downloads and the processer deadlocks. (#248)
+	log.Infof("waiting for all historical blocks (%d to %d) to complete...", s.initSlot, nextSlotDownload)
+	for slot := s.initSlot; slot <= nextSlotDownload; slot++ {
+		if _, err := s.downloadCache.BlockHistory.Wait(s.ctx, SlotTo[uint64](slot)); err != nil {
+			log.Errorf("context cancelled waiting for block at slot %d: %s", slot, err)
+			return
+		}
 	}
-	// do not continue until fill is done
 
 	log.Infof("Switch to head mode: following chain head")
 
