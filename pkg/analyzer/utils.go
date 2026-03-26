@@ -12,7 +12,7 @@ import (
 
 const (
 	ValidatorSetSize           = 500000          // Estimation of current number of validators, used for channel length declaration
-	epochsToFinalizedTentative = 3               // usually, 2 full epochs before the head it is finalized
+	epochsToFinalizedTentative = 4               // 4 epochs back to cover epoch_metrics/pool_summary offset on restart
 	dataWaitInterval           = 1 * time.Minute // wait for block or epoch to be in the cache
 )
 
