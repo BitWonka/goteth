@@ -336,6 +336,12 @@ func (s *ChainAnalyzer) processBlockRewards(bundle metrics.StateMetrics) {
 	}
 
 	for _, block := range bundle.GetMetricsBase().CurrentState.Blocks {
+		// Wait for ProcessBlock to finish appending transactions before reading
+		// them in BlockGasFees(). Without this, AgnosticTransactions may be empty
+		// and f_reward_fees/f_burnt_fees are written as 0 (see #249).
+		slotKey := fmt.Sprintf("%s%d", slotProcesserTag, block.Slot)
+		s.processerBook.WaitUntilInactive(slotKey)
+
 		blockRewards = append(blockRewards, s.getSingleBlockRewards(*block, mevBids))
 	}
 

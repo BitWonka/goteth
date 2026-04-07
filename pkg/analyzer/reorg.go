@@ -106,6 +106,13 @@ func (s *ChainAnalyzer) AdvanceFinalized(newFinalizedSlot phase0.Slot) {
 				s.downloadCache.StateHistory.Delete(epoch)
 				s.DownloadState(stateSlot)
 			}
+
+			// ProcessStateTransitionMetrics(E) calls StateHistory.Wait for
+			// epochs E, E-1 and E-2. Those dependency states may have been
+			// evicted by a previous CleanUpTo call, which would cause Wait
+			// to block forever. Re-download any that are missing. (#245)
+			s.ensureDependencyStates(epoch)
+
 			s.dbClient.DeleteStateMetrics(phase0.Epoch(epoch))
 			log.Infof("rewriting metrics for epoch %d (stateRootChanged=%t, blocksChanged=%t, dep=%t)",
 				epoch, stateRootChanged, blocksChanged,
@@ -118,6 +125,40 @@ func (s *ChainAnalyzer) AdvanceFinalized(newFinalizedSlot phase0.Slot) {
 
 	if advance {
 		log.Infof("checked states until slot %d, epoch %d", newFinalizedSlot, newFinalizedSlot/spec.SlotsPerEpoch)
+	}
+}
+
+// ensureDependencyStates checks that the states required by
+// ProcessStateTransitionMetrics (epoch, epoch-1, epoch-2) are present in the
+// in-memory cache. Any missing state is re-downloaded from the beacon node,
+// along with its epoch's blocks (needed by AddNewState).
+func (s *ChainAnalyzer) ensureDependencyStates(epoch uint64) {
+	depEpochs := []uint64{epoch}
+	if epoch >= 1 {
+		depEpochs = append(depEpochs, epoch-1)
+	}
+	if epoch >= 2 {
+		depEpochs = append(depEpochs, epoch-2)
+	}
+
+	initEpoch := uint64(s.initSlot / spec.SlotsPerEpoch)
+	for _, dep := range depEpochs {
+		if dep < initEpoch {
+			continue
+		}
+		if s.downloadCache.StateHistory.Available(dep) {
+			continue
+		}
+		log.Infof("dependency state for epoch %d missing from cache, re-downloading", dep)
+		// Ensure blocks exist first — AddNewState calls BlockHistory.Wait
+		// for every slot in the epoch.
+		for slot := dep * spec.SlotsPerEpoch; slot < (dep+1)*spec.SlotsPerEpoch; slot++ {
+			if !s.downloadCache.BlockHistory.Available(slot) {
+				s.DownloadBlock(phase0.Slot(slot))
+			}
+		}
+		depSlot := phase0.Slot((dep+1)*spec.SlotsPerEpoch - 1)
+		s.DownloadState(depSlot)
 	}
 }
 
