@@ -50,13 +50,20 @@ func (s *ChainAnalyzer) runHead() {
 	log.Info("launching head routine")
 	nextSlotDownload := s.fillToHead()
 
-	// Wait for ALL blocks in the historical range to be downloaded, not
-	// just the last one. With parallel workers, blocks are downloaded
-	// out of order — the last slot may be ready while intermediate slots
-	// are still in-flight. Without this, the switch to head mode drops
-	// those pending downloads and the processer deadlocks. (#248)
-	log.Infof("waiting for all historical blocks (%d to %d) to complete...", s.initSlot, nextSlotDownload)
-	for slot := s.initSlot; slot <= nextSlotDownload; slot++ {
+	// Wait for blocks that may still be in-flight. During historical
+	// processing, CleanUpTo evicts blocks older than 5 epochs, so only
+	// blocks within the last 5 epochs can still be pending. Waiting from
+	// initSlot would deadlock on evicted blocks (#253), and skipping via
+	// Available() would miss in-flight downloads (#248).
+	waitFrom := nextSlotDownload
+	if nextSlotDownload > 5*spec.SlotsPerEpoch {
+		waitFrom = nextSlotDownload - 5*spec.SlotsPerEpoch
+	}
+	if waitFrom < s.initSlot {
+		waitFrom = s.initSlot
+	}
+	log.Infof("waiting for remaining historical blocks (%d to %d) to complete...", waitFrom, nextSlotDownload)
+	for slot := waitFrom; slot <= nextSlotDownload; slot++ {
 		if _, err := s.downloadCache.BlockHistory.Wait(s.ctx, SlotTo[uint64](slot)); err != nil {
 			log.Errorf("context cancelled waiting for block at slot %d: %s", slot, err)
 			return
