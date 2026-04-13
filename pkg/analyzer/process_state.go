@@ -357,6 +357,10 @@ func (s *ChainAnalyzer) processBlockRewards(bundle metrics.StateMetrics) {
 		slotKey := fmt.Sprintf("%s%d", slotProcesserTag, block.Slot)
 		s.processerBook.WaitUntilInactive(slotKey)
 
+		// Retry fetching receipts if ProcessBlock failed to get them.
+		// By now the EL may have recovered from the transient issue (#251).
+		s.recoverBlockReceipts(block)
+
 		blockRewards = append(blockRewards, s.getSingleBlockRewards(*block, mevBids))
 	}
 
