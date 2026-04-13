@@ -182,6 +182,36 @@ func (s *ChainAnalyzer) processTransactions(block *spec.AgnosticBlock, receipts 
 	return err
 }
 
+// recoverBlockReceipts retries fetching EL receipts for blocks where
+// ProcessETH1Data failed to populate AgnosticTransactions.
+// Called from processBlockRewards as a second chance before fee calculation.
+// See https://github.com/migalabs/goteth/issues/251
+func (s *ChainAnalyzer) recoverBlockReceipts(block *spec.AgnosticBlock) {
+	if len(block.ExecutionPayload.AgnosticTransactions) > 0 {
+		return // already populated
+	}
+	if len(block.ExecutionPayload.Transactions) == 0 {
+		return // no transactions in block
+	}
+	if !s.metrics.Transactions {
+		return // transactions metric not enabled
+	}
+
+	log.Warnf("slot %d: retrying receipt fetch for block reward calculation", block.Slot)
+	receipts, err := s.cli.GetBlockReceipts(*block)
+	if err != nil {
+		log.Errorf("slot %d: receipt recovery failed: %s", block.Slot, err)
+		return
+	}
+	txs, err := spec.ParseTransactionsFromBlock(*block, receipts)
+	if err != nil {
+		log.Errorf("slot %d: transaction parse failed during recovery: %s", block.Slot, err)
+		return
+	}
+	block.ExecutionPayload.AgnosticTransactions = txs
+	log.Infof("slot %d: recovered %d transaction receipts for fee calculation", block.Slot, len(txs))
+}
+
 func (s *ChainAnalyzer) processBlobSidecars(block *spec.AgnosticBlock, txs []spec.AgnosticTransaction) {
 	var blobs []*spec.AgnosticBlobSidecar
 	var err error
