@@ -1,6 +1,8 @@
 package db
 
 import (
+	"math/big"
+
 	"github.com/ClickHouse/ch-go/proto"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 )
@@ -24,13 +26,13 @@ func blockRewardsInput(blocks []BlockReward) proto.Input {
 	// one object per column
 	var (
 		f_slot             proto.ColUInt64
-		f_reward_fees      proto.ColUInt64
-		f_burnt_fees       proto.ColUInt64
+		f_reward_fees      proto.ColStr
+		f_burnt_fees       proto.ColStr
 		f_cl_manual_reward proto.ColUInt64
 		f_cl_api_reward    proto.ColUInt64
 		f_relays           = new(proto.ColStr).Array()
 		f_builder_pubkey   proto.ColStr
-		f_bid_commission   proto.ColUInt64
+		f_bid_commission   proto.ColStr
 	)
 
 	for _, blockReward := range blocks {
@@ -41,17 +43,16 @@ func blockRewardsInput(blocks []BlockReward) proto.Input {
 		}
 
 		f_slot.Append(uint64(blockReward.Slot))
-		f_reward_fees.Append(blockReward.RewardFees)
-		f_burnt_fees.Append(blockReward.BurntFees)
+		f_reward_fees.Append(blockReward.RewardFees.String())
+		f_burnt_fees.Append(blockReward.BurntFees.String())
 		f_cl_manual_reward.Append(uint64(blockReward.CLManualReward))
 		f_cl_api_reward.Append(uint64(blockReward.CLApiReward))
 		f_relays.Append(blockReward.Relays)
 		f_builder_pubkey.Append(builder_pubkey)
-		f_bid_commission.Append(blockReward.BidCommision)
+		f_bid_commission.Append(blockReward.BidCommision.String())
 	}
 
 	return proto.Input{
-
 		{Name: "f_slot", Data: f_slot},
 		{Name: "f_reward_fees", Data: f_reward_fees},
 		{Name: "f_burnt_fees", Data: f_burnt_fees},
@@ -85,9 +86,9 @@ type BlockReward struct {
 	Slot           phase0.Slot
 	CLManualReward phase0.Gwei // Gwei
 	CLApiReward    phase0.Gwei // Gwei
-	RewardFees     uint64      // Gwei
-	BurntFees      uint64      // Gwei
+	RewardFees     *big.Int    // Wei
+	BurntFees      *big.Int    // Wei
 	Relays         []string
 	BuilderPubkeys []string
-	BidCommision   uint64
+	BidCommision   *big.Int // Wei
 }
