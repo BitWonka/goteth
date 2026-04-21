@@ -5,6 +5,7 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/migalabs/goteth/pkg/utils"
 )
 
 var (
@@ -43,13 +44,13 @@ func blockRewardsInput(blocks []BlockReward) proto.Input {
 		}
 
 		f_slot.Append(uint64(blockReward.Slot))
-		f_reward_fees.Append(blockReward.RewardFees.String())
-		f_burnt_fees.Append(blockReward.BurntFees.String())
+		f_reward_fees.Append(utils.BigIntToString(blockReward.RewardFees))
+		f_burnt_fees.Append(utils.BigIntToString(blockReward.BurntFees))
 		f_cl_manual_reward.Append(uint64(blockReward.CLManualReward))
 		f_cl_api_reward.Append(uint64(blockReward.CLApiReward))
 		f_relays.Append(blockReward.Relays)
 		f_builder_pubkey.Append(builder_pubkey)
-		f_bid_commission.Append(blockReward.BidCommision.String())
+		f_bid_commission.Append(utils.BigIntToString(blockReward.BidCommision))
 	}
 
 	return proto.Input{
