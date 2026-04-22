@@ -65,9 +65,10 @@ var RepairMevBidsCommand = &cli.Command{
 }
 
 type mevSlotRow struct {
-	Slot      uint64 `ch:"f_slot"`
-	Bid       string `ch:"f_bid_commission"`
-	BlockHash string `ch:"f_el_block_hash"`
+	Slot      uint64   `ch:"f_slot"`
+	Bid       string   `ch:"f_bid_commission"`
+	BlockHash string   `ch:"f_el_block_hash"`
+	HasRelay  bool     `ch:"has_relay"`
 }
 
 func LaunchRepairMevBids(c *cli.Context) error {
@@ -114,11 +115,11 @@ func LaunchRepairMevBids(c *cli.Context) error {
 	log.Infof("Scanning slot range %d - %d", fromSlot, toSlot)
 
 	query := `
-		SELECT br.f_slot, br.f_bid_commission, bm.f_el_block_hash
+		SELECT br.f_slot, br.f_bid_commission, bm.f_el_block_hash,
+		       length(br.f_relays) > 0 AS has_relay
 		FROM t_block_rewards br FINAL
 		INNER JOIN t_block_metrics bm FINAL ON br.f_slot = bm.f_slot
-		WHERE length(br.f_relays) > 0
-		  AND br.f_slot BETWEEN $1 AND $2
+		WHERE br.f_slot BETWEEN $1 AND $2
 		ORDER BY br.f_slot ASC`
 
 	// Stream rows from ClickHouse
@@ -142,7 +143,7 @@ func LaunchRepairMevBids(c *cli.Context) error {
 		}
 
 		var row mevSlotRow
-		if err := rows.Scan(&row.Slot, &row.Bid, &row.BlockHash); err != nil {
+		if err := rows.Scan(&row.Slot, &row.Bid, &row.BlockHash, &row.HasRelay); err != nil {
 			log.Errorf("failed to scan row: %s", err)
 			continue
 		}
@@ -200,18 +201,32 @@ func processMevBatch(
 	dryRun bool,
 ) (mismatches int, relayHits int) {
 
+	// Skip batch if no rows have relay data
+	hasAnyRelay := false
+	for _, row := range batch {
+		if row.HasRelay {
+			hasAnyRelay = true
+			break
+		}
+	}
+	if !hasAnyRelay {
+		return 0, 0
+	}
+
 	firstSlot := phase0.Slot(batch[0].Slot)
 	lastSlot := phase0.Slot(batch[len(batch)-1].Slot)
-
-	// Use actual slot span so the relay query covers all slots in the batch
 	slotSpan := int(lastSlot-firstSlot) + 1
 
 	bids, err := relayMonitor.GetDeliveredBidsPerSlotRange(lastSlot, slotSpan)
 	if err != nil {
-		log.Warnf("relay query failed for slot range %d-%d: %s", firstSlot, lastSlot, err)
+		log.Warnf("relay query failed for batch ending at slot %d: %s", lastSlot, err)
 	}
 
 	for _, row := range batch {
+		if !row.HasRelay {
+			continue
+		}
+
 		slot := phase0.Slot(row.Slot)
 		relayBids := bids.GetBidsAtSlot(slot)
 
@@ -242,12 +257,11 @@ func processMevBatch(
 		if matchedBid == nil {
 			continue
 		}
-		bestBid := matchedBid
 
-		if storedBid.Cmp(bestBid) != 0 {
+		if storedBid.Cmp(matchedBid) != 0 {
 			log.Warnf("Slot %d: MISMATCH stored=%s relay=%s (diff=%s)",
-				slot, storedBid.String(), bestBid.String(),
-				new(big.Int).Sub(bestBid, storedBid).String())
+				slot, storedBid.String(), matchedBid.String(),
+				new(big.Int).Sub(matchedBid, storedBid).String())
 			mismatches++
 
 			if !dryRun {
@@ -255,11 +269,11 @@ func processMevBatch(
 					ALTER TABLE t_block_rewards
 					UPDATE f_bid_commission = $1
 					WHERE f_slot = $2
-				`, bestBid.String(), uint64(slot))
+				`, matchedBid.String(), uint64(slot))
 				if err != nil {
 					log.Errorf("Slot %d: failed to update: %s", slot, err)
 				} else {
-					log.Infof("Slot %d: updated bid commission to %s", slot, bestBid.String())
+					log.Infof("Slot %d: updated bid commission to %s", slot, matchedBid.String())
 				}
 			}
 		}
