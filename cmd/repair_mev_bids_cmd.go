@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -201,32 +202,17 @@ func processMevBatch(
 	dryRun bool,
 ) (mismatches int, relayHits int) {
 
-	// Skip batch if no rows have relay data
-	hasAnyRelay := false
-	for _, row := range batch {
-		if row.HasRelay {
-			hasAnyRelay = true
-			break
-		}
-	}
-	if !hasAnyRelay {
-		return 0, 0
-	}
-
 	firstSlot := phase0.Slot(batch[0].Slot)
 	lastSlot := phase0.Slot(batch[len(batch)-1].Slot)
 	slotSpan := int(lastSlot-firstSlot) + 1
 
 	bids, err := relayMonitor.GetDeliveredBidsPerSlotRange(lastSlot, slotSpan)
 	if err != nil {
-		log.Warnf("relay query failed for batch ending at slot %d: %s", lastSlot, err)
+		log.Warnf("relay query failed for batch ending at slot %d: %s — skipping batch", lastSlot, err)
+		return 0, 0
 	}
 
 	for _, row := range batch {
-		if !row.HasRelay {
-			continue
-		}
-
 		slot := phase0.Slot(row.Slot)
 		relayBids := bids.GetBidsAtSlot(slot)
 
@@ -235,20 +221,13 @@ func processMevBatch(
 		}
 		relayHits++
 
-		// Parse stored bid
-		storedBid, ok := new(big.Int).SetString(row.Bid, 10)
-		if !ok {
-			log.Warnf("Slot %d: could not parse stored bid %q, skipping", slot, row.Bid)
-			continue
-		}
-
 		// Match relay bid by block hash, same as goteth ingestion
 		var matchedBid *big.Int
 		for _, bid := range relayBids {
 			if bid.Value == nil || bid.Value.Sign() <= 0 {
 				continue
 			}
-			if bid.BlockHash.String() == row.BlockHash {
+			if strings.EqualFold(bid.BlockHash.String(), row.BlockHash) {
 				matchedBid = bid.Value
 				break
 			}
@@ -258,23 +237,37 @@ func processMevBatch(
 			continue
 		}
 
-		if storedBid.Cmp(matchedBid) != 0 {
+		// Parse stored bid
+		storedBid, ok := new(big.Int).SetString(row.Bid, 10)
+		if !ok {
+			storedBid = new(big.Int)
+		}
+
+		if storedBid.Cmp(matchedBid) == 0 {
+			continue
+		}
+
+		if !row.HasRelay {
+			log.Warnf("Slot %d: MISSING relay data, relay reports bid=%s", slot, matchedBid.String())
+		} else {
 			log.Warnf("Slot %d: MISMATCH stored=%s relay=%s (diff=%s)",
 				slot, storedBid.String(), matchedBid.String(),
 				new(big.Int).Sub(matchedBid, storedBid).String())
-			mismatches++
+		}
+		mismatches++
 
-			if !dryRun {
-				err := conn.Exec(ctx, `
-					ALTER TABLE t_block_rewards
-					UPDATE f_bid_commission = $1
-					WHERE f_slot = $2
-				`, matchedBid.String(), uint64(slot))
-				if err != nil {
-					log.Errorf("Slot %d: failed to update: %s", slot, err)
-				} else {
-					log.Infof("Slot %d: updated bid commission to %s", slot, matchedBid.String())
-				}
+		if !dryRun {
+			err := conn.Exec(ctx, `
+				INSERT INTO t_block_rewards
+				SELECT f_slot, f_reward_fees, f_burnt_fees, f_cl_manual_reward,
+				       f_cl_api_reward, f_relays, f_builder_pubkey, $1 AS f_bid_commission
+				FROM t_block_rewards FINAL
+				WHERE f_slot = $2
+			`, matchedBid.String(), uint64(slot))
+			if err != nil {
+				log.Errorf("Slot %d: failed to insert correction: %s", slot, err)
+			} else {
+				log.Infof("Slot %d: inserted corrected bid commission %s", slot, matchedBid.String())
 			}
 		}
 	}
