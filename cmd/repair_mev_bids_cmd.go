@@ -12,6 +12,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/migalabs/goteth/pkg/db"
 	"github.com/migalabs/goteth/pkg/relay"
 	"github.com/migalabs/goteth/pkg/utils"
 	"github.com/sirupsen/logrus"
@@ -87,13 +88,11 @@ func LaunchRepairMevBids(c *cli.Context) error {
 		cancel()
 	}()
 
-	// Connect to ClickHouse
+	// Connect to ClickHouse — reuse goteth's manual URL parser to handle
+	// the x-multi-statement param that ParseDSN doesn't understand
 	dbUrl := c.String("db-url")
-	opts, err := clickhouse.ParseDSN(dbUrl)
-	if err != nil {
-		return fmt.Errorf("could not parse db url: %w", err)
-	}
-	conn, err := clickhouse.Open(opts)
+	chOpts := db.ParseChUrlIntoOptionsHighLevel(dbUrl)
+	conn, err := clickhouse.Open(&chOpts)
 	if err != nil {
 		return fmt.Errorf("could not connect to clickhouse: %w", err)
 	}
