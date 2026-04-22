@@ -114,71 +114,49 @@ func LaunchRepairMevBids(c *cli.Context) error {
 	toSlot := uint64(c.Int("to-slot"))
 	log.Infof("Scanning slot range %d - %d", fromSlot, toSlot)
 
-	query := `
-		SELECT br.f_slot, br.f_bid_commission, bm.f_el_block_hash,
-		       length(br.f_relays) > 0 AS has_relay
-		FROM t_block_rewards br FINAL
-		INNER JOIN t_block_metrics bm FINAL ON br.f_slot = bm.f_slot
-		WHERE br.f_slot BETWEEN $1 AND $2
-		ORDER BY br.f_slot ASC`
-
-	// Stream rows from ClickHouse
-	rows, err := conn.Query(ctx, query, fromSlot, toSlot)
-	if err != nil {
-		return fmt.Errorf("could not query block rewards: %w", err)
-	}
-	defer rows.Close()
-
 	dryRun := c.Bool("dry-run")
 	batchSize := c.Int("batch-size")
 	rateLimitMs := c.Int("rate-limit-ms")
 	mismatches := 0
 	checked := 0
 	relayHits := 0
-	batch := make([]mevSlotRow, 0, batchSize)
+	cursor := fromSlot
 
-	for rows.Next() {
+	for cursor <= toSlot {
 		if ctx.Err() != nil {
 			break
 		}
 
-		var row mevSlotRow
-		if err := rows.Scan(&row.Slot, &row.Bid, &row.BlockHash, &row.HasRelay); err != nil {
-			log.Errorf("failed to scan row: %s", err)
-			continue
+		var batch []mevSlotRow
+		err = conn.Select(ctx, &batch, `
+			SELECT br.f_slot, br.f_bid_commission, bm.f_el_block_hash,
+			       length(br.f_relays) > 0 AS has_relay
+			FROM t_block_rewards br FINAL
+			INNER JOIN t_block_metrics bm FINAL ON br.f_slot = bm.f_slot
+			WHERE br.f_slot >= $1 AND br.f_slot <= $2
+			ORDER BY br.f_slot ASC
+			LIMIT $3
+		`, cursor, toSlot, batchSize)
+		if err != nil {
+			return fmt.Errorf("could not query block rewards at cursor %d: %w", cursor, err)
 		}
 
-		batch = append(batch, row)
-
-		if len(batch) < batchSize {
-			continue
+		if len(batch) == 0 {
+			break
 		}
 
-		// Process batch
 		batchMismatches, batchRelayHits := processMevBatch(ctx, log, conn, relayMonitor, batch, dryRun)
 		mismatches += batchMismatches
 		relayHits += batchRelayHits
 		checked += len(batch)
-		batch = batch[:0]
 
-		if checked%10000 == 0 {
-			log.Infof("Progress: %d checked, %d mismatches, %d relay hits", checked, mismatches, relayHits)
+		cursor = batch[len(batch)-1].Slot + 1
+
+		if checked/10000 != (checked-len(batch))/10000 {
+			log.Infof("Progress: %d checked, %d mismatches, %d relay hits, cursor at slot %d", checked, mismatches, relayHits, cursor)
 		}
 
-		// Rate limit
 		time.Sleep(time.Duration(rateLimitMs) * time.Millisecond)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading rows from ClickHouse: %w", err)
-	}
-
-	// Process remaining batch
-	if len(batch) > 0 && ctx.Err() == nil {
-		batchMismatches, batchRelayHits := processMevBatch(ctx, log, conn, relayMonitor, batch, dryRun)
-		mismatches += batchMismatches
-		relayHits += batchRelayHits
-		checked += len(batch)
 	}
 
 	log.Infof("Done. Checked %d blocks, %d relay hits, %d mismatches", checked, relayHits, mismatches)
