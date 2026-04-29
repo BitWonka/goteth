@@ -189,7 +189,7 @@ func (s *ChainAnalyzer) fillToHead() phase0.Slot {
 		newHead := s.cli.RequestCurrentHead()
 		handoffThreshold := headSlot + phase0.Slot(spec.SlotsPerEpoch)
 		if newHead <= handoffThreshold {
-			return newHead
+			return headSlot
 		}
 		log.Infof("head moved %d slots during catch-up, looping historical", newHead-headSlot)
 		headSlot = newHead
