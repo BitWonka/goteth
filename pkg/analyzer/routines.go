@@ -175,12 +175,8 @@ func (s *ChainAnalyzer) fillToHead() phase0.Slot {
 
 	log.Infof("filling to head...")
 
-	// Loop historical mode until the gap to live head is small enough for
-	// runHead's incremental dispatch to handle. A single historical pass
-	// can take long enough that the chain head moves by many epochs in the
-	// meantime; runHead's catch-up loop then saturates the processerBook
-	// and stalls. Re-checking head and looping ensures we hand off to
-	// runHead with a manageable gap.
+	// Re-run historical if the chain head moved more than an epoch
+	// during the previous pass. Hands off to runHead with a small gap.
 	for {
 		s.wgMainRoutine.Add(1) // add because historical will defer it
 		s.runHistorical(nextSlotDownload, headSlot)
