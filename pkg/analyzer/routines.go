@@ -174,9 +174,26 @@ func (s *ChainAnalyzer) fillToHead() phase0.Slot {
 	s.endEpochAggregation = s.startEpochAggregation + phase0.Epoch(s.rewardsAggregationEpochs-1)
 
 	log.Infof("filling to head...")
-	s.wgMainRoutine.Add(1) // add because historical will defer it
-	s.runHistorical(nextSlotDownload, headSlot)
-	return headSlot
+
+	// Loop historical mode until the gap to live head is small enough for
+	// runHead's incremental dispatch to handle. A single historical pass
+	// can take long enough that the chain head moves by many epochs in the
+	// meantime; runHead's catch-up loop then saturates the processerBook
+	// and stalls. Re-checking head and looping ensures we hand off to
+	// runHead with a manageable gap.
+	for {
+		s.wgMainRoutine.Add(1) // add because historical will defer it
+		s.runHistorical(nextSlotDownload, headSlot)
+
+		nextSlotDownload = headSlot + 1
+		newHead := s.cli.RequestCurrentHead()
+		handoffThreshold := headSlot + phase0.Slot(spec.SlotsPerEpoch)
+		if newHead <= handoffThreshold {
+			return newHead
+		}
+		log.Infof("head moved %d slots during catch-up, looping historical", newHead-headSlot)
+		headSlot = newHead
+	}
 }
 
 func (s *ChainAnalyzer) runHistorical(init phase0.Slot, end phase0.Slot) {
